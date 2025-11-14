@@ -1,0 +1,21 @@
+# Security updates for critical vulnerabilities
+# Install these with: pip install -r requirements-security.txt
+
+# Critical vulnerabilities
+aiohttp>=3.11.11  # Fix: HTTP Request/Response Smuggling (Low)
+torch>=2.5.0  # Fix: RCE with torch.load (Critical), Improper Resource Shutdown (Moderate), DoS (Low)
+protobuf>=5.29.2  # Fix: Denial of Service issue (High)
+
+# High severity vulnerabilities
+litellm>=1.55.0  # Fix: Improper Authorization (High), DoS via Crafted HTTP Request (High)
+tornado>=6.4.3  # Fix: Excessive logging from malformed multipart form data (High)
+
+# Moderate severity vulnerabilities
+Jinja2>=3.1.5  # Fix: Multiple sandbox breakout vulnerabilities (Moderate)
+requests>=2.32.4  # Fix: .netrc credentials leak via malicious URLs (Moderate)
+urllib3>=2.2.4  # Fix: Redirect control issues (Moderate)
+Crawl4AI>=0.4.1  # Fix: SSRF vulnerability (Moderate)
+
+# Note: pandasai RCE issue
+# pandasai>=2.5.0 or consider removing if not actively using interactive prompt feature
+pandasai>=2.5.0
