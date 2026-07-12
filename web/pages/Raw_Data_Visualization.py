@@ -2,96 +2,108 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
+# Supported chart types (also used to lay out the selector buttons).
+CHART_TYPES = ["bar", "scatter", "pie", "donut"]
+# Fraction of the pie removed to render a donut chart.
+DONUT_HOLE = 0.4
+# Encoding used when reading uploaded CSV files (Korean Windows default).
+CSV_ENCODING = "cp949"
 
-def set_custom_style():
-    st.markdown("""
-        <style>
-        /* Main containers */
-        .stApp {
-            background-color: #f8f9fa;
-        }
+# Page-wide custom styling.
+CUSTOM_CSS = """
+    <style>
+    /* Main containers */
+    .stApp {
+        background-color: #f8f9fa;
+    }
 
-        /* Headers */
-        h1 { color: #2c3e50; font-weight: 600; }
-        h2 { color: #34495e; font-weight: 500; }
-        h3 { color: #445566; font-weight: 500; }
+    /* Headers */
+    h1 { color: #2c3e50; font-weight: 600; }
+    h2 { color: #34495e; font-weight: 500; }
+    h3 { color: #445566; font-weight: 500; }
 
-        /* Expander styling */
-        .streamlit-expander {
-            border: 1px solid #e1e4e8 !important;
-            border-radius: 8px !important;
-            background-color: white !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
-            margin-bottom: 1rem !important;
-        }
+    /* Expander styling */
+    .streamlit-expander {
+        border: 1px solid #e1e4e8 !important;
+        border-radius: 8px !important;
+        background-color: white !important;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05) !important;
+        margin-bottom: 1rem !important;
+    }
 
-        /* Button styling */
-        .stButton > button {
-            background-color: #4b6584;
-            color: white;
-            border-radius: 6px;
-            border: none;
-            padding: 0.5rem 1rem;
-            font-weight: 500;
-            transition: background-color 0.3s ease;
-        }
-        .stButton > button:hover {
-            background-color: #3c5270;
-        }
+    /* Button styling */
+    .stButton > button {
+        background-color: #4b6584;
+        color: white;
+        border-radius: 6px;
+        border: none;
+        padding: 0.5rem 1rem;
+        font-weight: 500;
+        transition: background-color 0.3s ease;
+    }
+    .stButton > button:hover {
+        background-color: #3c5270;
+    }
 
-        /* Primary button */
-        .stButton > button[kind="primary"] {
-            background-color: #3498db;
-        }
-        .stButton > button[kind="primary"]:hover {
-            background-color: #2980b9;
-        }
+    /* Primary button */
+    .stButton > button[kind="primary"] {
+        background-color: #3498db;
+    }
+    .stButton > button[kind="primary"]:hover {
+        background-color: #2980b9;
+    }
 
-        /* DataFrames */
-        .dataframe {
-            background-color: white;
-            border: 1px solid #e1e4e8;
-            border-radius: 6px;
-        }
+    /* DataFrames */
+    .dataframe {
+        background-color: white;
+        border: 1px solid #e1e4e8;
+        border-radius: 6px;
+    }
 
-        /* Checkbox container */
-        .checkbox-container {
-            max-height: 300px;
-            overflow-y: auto;
-            padding-right: 10px;
-            background-color: white;
-            border-radius: 6px;
-            border: 1px solid #e1e4e8;
-        }
+    /* Checkbox container */
+    .checkbox-container {
+        max-height: 300px;
+        overflow-y: auto;
+        padding-right: 10px;
+        background-color: white;
+        border-radius: 6px;
+        border: 1px solid #e1e4e8;
+    }
 
-        /* Checkbox styling */
-        .stCheckbox {
-            margin-bottom: 0.5rem;
-        }
+    /* Checkbox styling */
+    .stCheckbox {
+        margin-bottom: 0.5rem;
+    }
 
-        /* Scrollbar styling */
-        .checkbox-container::-webkit-scrollbar {
-            width: 6px;
-        }
+    /* Scrollbar styling */
+    .checkbox-container::-webkit-scrollbar {
+        width: 6px;
+    }
 
-        .checkbox-container::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 3px;
-        }
+    .checkbox-container::-webkit-scrollbar-track {
+        background: #f1f1f1;
+        border-radius: 3px;
+    }
 
-        .checkbox-container::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 3px;
-        }
+    .checkbox-container::-webkit-scrollbar-thumb {
+        background: #888;
+        border-radius: 3px;
+    }
 
-        .checkbox-container::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    .checkbox-container::-webkit-scrollbar-thumb:hover {
+        background: #555;
+    }
+    </style>
+"""
 
 
-def initialize_session_state():
+def set_custom_style() -> None:
+    """Inject the page's custom CSS."""
+    st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
+
+
+def initialize_session_state() -> None:
+    """Seed the session-state keys used by the visualization wizard."""
     if 'current_step' not in st.session_state:
         st.session_state.current_step = 1
     if 'df' not in st.session_state:
@@ -110,7 +122,8 @@ def initialize_session_state():
         st.session_state.y_axis = None
 
 
-def reset_session_state():
+def reset_session_state() -> None:
+    """Clear all wizard state (bumping the uploader key so it re-renders empty)."""
     if 'file_uploader_key' in st.session_state:
         st.session_state.file_uploader_key += 1
     for key in list(st.session_state.keys()):
@@ -119,25 +132,37 @@ def reset_session_state():
     initialize_session_state()
 
 
-def handle_preprocessing():
-    """전처리 로직을 처리하는 함수"""
+def handle_preprocessing() -> bool:
+    """Placeholder for preprocessing logic; currently a no-op."""
     return True
 
 
-def data_visualization():
-    set_custom_style()
+def build_chart(df: pd.DataFrame, chart_type: str, x_axis: str, y_axis: str):
+    """Build a styled Plotly figure of ``chart_type`` from ``df``.
 
-    # Sidebar
-    # with st.sidebar:
-    #     st.title("Navigation")
-    #     st.page_link("Home.py", label="Home", icon="🏠")
-    #     st.page_link("pages/Search.py", label="Search", icon="🔍")
-    #     st.page_link("pages/Raw_Data_Visualization.py", label="Raw Data Visualization", icon="📊")
-    #
-    #     st.markdown("---")
-    #     with st.expander("Contact"):
-    #         st.markdown("📧 support@example.com")
-    #         st.markdown("📱 +82 10-1234-5678")
+    Returns ``None`` for an unknown chart type.
+    """
+    if chart_type == "bar":
+        fig = px.bar(df, x=x_axis, y=y_axis, title="Bar Chart")
+    elif chart_type == "scatter":
+        fig = px.scatter(df, x=x_axis, y=y_axis, title="Scatter Plot")
+    elif chart_type == "pie":
+        fig = px.pie(df, values=y_axis, names=x_axis, title="Pie Chart")
+    elif chart_type == "donut":
+        fig = px.pie(df, values=y_axis, names=x_axis, title="Donut Chart", hole=DONUT_HOLE)
+    else:
+        return None
+
+    fig.update_layout(
+        plot_bgcolor="white",
+        paper_bgcolor="white",
+        font_color="#445566",
+    )
+    return fig
+
+
+def data_visualization() -> None:
+    set_custom_style()
 
     st.title("Data Visualization")
     initialize_session_state()
@@ -154,7 +179,7 @@ def data_visualization():
         if uploaded_file is not None:
             try:
                 if uploaded_file.name.endswith('.csv'):
-                    st.session_state.df = pd.read_csv(uploaded_file, encoding='cp949')
+                    st.session_state.df = pd.read_csv(uploaded_file, encoding=CSV_ENCODING)
                 else:
                     st.session_state.df = pd.read_excel(uploaded_file)
 
@@ -177,14 +202,14 @@ def data_visualization():
                     st.subheader("Select Columns")
                     columns = st.session_state.df.columns.tolist()
 
-                    # Select All 체크박스 추가
+                    # "Select All" toggle
                     select_all = st.checkbox("Select All",
                                              value=len(st.session_state.selected_columns) == len(columns),
                                              key="select_all")
 
                     st.markdown('<div class="checkbox-container">', unsafe_allow_html=True)
 
-                    # 컬럼별 체크박스
+                    # Per-column checkboxes
                     selected = {}
                     for col in columns:
                         if select_all:
@@ -230,13 +255,11 @@ def data_visualization():
         with st.expander("STEP 3. Visualization", expanded=st.session_state.current_step == 3):
             st.subheader("Select Chart Type")
 
-            chart_types = ["bar", "scatter", "pie", "donut"]
-            cols = st.columns(4)
-
-            for i, chart_type in enumerate(chart_types):
+            cols = st.columns(len(CHART_TYPES))
+            for i, chart_type in enumerate(CHART_TYPES):
                 with cols[i]:
                     button_style = "primary" if st.session_state.chart_type == chart_type else "secondary"
-                    if st.button(chart_type.title(), use_container_width=True, type=button_style):
+                    if st.button(chart_type.title(), width="stretch", type=button_style):
                         st.session_state.chart_type = chart_type
                         st.rerun()
 
@@ -264,24 +287,11 @@ def data_visualization():
 
                 if st.button("Generate Visualization", type="primary"):
                     if x_axis and y_axis and st.session_state.chart_type:
-                        fig = None
-                        if st.session_state.chart_type == "bar":
-                            fig = px.bar(st.session_state.df, x=x_axis, y=y_axis, title="Bar Chart")
-                        elif st.session_state.chart_type == "scatter":
-                            fig = px.scatter(st.session_state.df, x=x_axis, y=y_axis, title="Scatter Plot")
-                        elif st.session_state.chart_type == "pie":
-                            fig = px.pie(st.session_state.df, values=y_axis, names=x_axis, title="Pie Chart")
-                        elif st.session_state.chart_type == "donut":
-                            fig = px.pie(st.session_state.df, values=y_axis, names=x_axis, title="Donut Chart",
-                                         hole=0.4)
-
+                        fig = build_chart(
+                            st.session_state.df, st.session_state.chart_type, x_axis, y_axis
+                        )
                         if fig:
-                            fig.update_layout(
-                                plot_bgcolor="white",
-                                paper_bgcolor="white",
-                                font_color="#445566"
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
+                            st.plotly_chart(fig, width="stretch")
                     else:
                         st.warning("Please select both axes and a chart type.")
 
