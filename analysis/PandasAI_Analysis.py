@@ -1,40 +1,65 @@
+"""Business/LLM layer: turn raw crawler data into analysed, presentable results."""
+
+import os
+from typing import Optional
+
+import pandas as pd
 from pandasai import SmartDataframe
 from pandasai.llm import OpenAI
 from dotenv import load_dotenv
-import os
+
+import config
 from gathering_data.data_gatherer import NaverRECrawler
 
 load_dotenv()
 
 
-def format_analysis_results(df, query_result):
+def clean_property_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove duplicate buildings and zero-priced rows, then reset the index.
+
+    Deduplicates on ``Name`` (keeping the first occurrence) and drops rows whose
+    ``MaxPrice`` is 0, which represent listings without a valid deal price.
     """
-    데이터를 포맷팅하여 결과를 반환.
-    """
+    df_cleaned = df.drop_duplicates(subset="Name", keep="first")
+    df_cleaned = df_cleaned[df_cleaned["MaxPrice"] != 0]
+    return df_cleaned.reset_index(drop=True)
+
+
+def format_analysis_results(df: pd.DataFrame, query_result: dict) -> dict:
+    """Summarise ``df`` into stats plus top/affordable property tables."""
     try:
         stats = {
-            'Total Properties': len(df),
-            'Unique Buildings': df['Name'].nunique(),
-            'Average Price': df['MinPrice'].mean(),
-            'Average Area': df['Area'].mean(),
-            'Price Range': (df['MinPrice'].min(), df['MaxPrice'].max())
+            "Total Properties": len(df),
+            "Unique Buildings": df["Name"].nunique(),
+            "Average Price": df["MinPrice"].mean(),
+            "Average Area": df["Area"].mean(),
+            "Price Range": (df["MinPrice"].min(), df["MaxPrice"].max()),
         }
 
-        # 통계 및 결과 텍스트 포맷팅
-        formatted_result = {
+        top_n = config.TOP_N_PROPERTIES
+        result_columns = ["Name", "MinPrice", "MaxPrice", "Area"]
+        return {
             "stats": stats,
-            "top_properties": df.nlargest(5, 'MaxPrice')[['Name', 'MinPrice', 'MaxPrice', 'Area']],
-            "affordable_properties": df.nsmallest(5, 'MinPrice')[['Name', 'MinPrice', 'MaxPrice', 'Area']],
+            "top_properties": df.nlargest(top_n, "MaxPrice")[result_columns],
+            "affordable_properties": df.nsmallest(top_n, "MinPrice")[result_columns],
             "query_result": query_result,
         }
-
-        return formatted_result
 
     except Exception as e:
         return {"error": f"Formatting error: {str(e)}"}
 
 
-def run(input_query, model, location=None, data=None):
+def run(
+    input_query: str,
+    model: str,
+    location: Optional[str] = None,
+    data: Optional[pd.DataFrame] = None,
+):
+    """Fetch (if needed) and analyse real-estate data for ``input_query``.
+
+    Returns a ``(dataframe, result_dict)`` tuple. On failure the dataframe is
+    ``None`` and the result dict carries the error message.
+    """
     try:
         # Data retrieval
         if data is None and location is not None:
@@ -43,58 +68,32 @@ def run(input_query, model, location=None, data=None):
         elif data is None:
             raise ValueError("Either location or data must be provided")
 
-        # Column mapping
-        column_mapping = {
-            'Name': 'Name',
-            'minDeal': 'MinPrice',
-            'maxDeal': 'MaxPrice',
-            'representativeArea': 'Area',
-            'Type': 'PropertyType'
-        }
-
+        # Map raw crawler columns to the friendly analysis column names.
+        column_mapping = config.PROPERTY_COLUMN_MAPPING
         df = data[list(column_mapping.keys())].copy()
         df.columns = list(column_mapping.values())
 
         # OpenAI model handling
         if model == "openai":
-            OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-            if not OPENAI_API_KEY:
+            openai_api_key = os.getenv(config.ENV_OPENAI_API_KEY)
+            if not openai_api_key:
                 raise ValueError("OpenAI API key not found")
 
-            llm = OpenAI(api_token=OPENAI_API_KEY, model_name="gpt-4o")
+            llm = OpenAI(api_token=openai_api_key, model_name=config.OPENAI_MODEL)
             sdf = SmartDataframe(df, config={
                 "llm": llm,
-                "verbose": True,
-                "enable_cache": True
+                "verbose": config.PANDASAI_VERBOSE,
+                "enable_cache": config.PANDASAI_ENABLE_CACHE,
             })
 
-            prompt = f"""
-            Analyze the real estate data for the following query: {input_query}
-
-            Return a dictionary with the following structure:
-            {{
-                "type": "string",
-                "value": "<your analysis here>"
-            }}
-
-            Include in your analysis:
-            1. A brief summary of findings
-            2. Specific insights related to the query
-            3. Notable properties that match the criteria
-            """
-
+            prompt = config.PANDASAI_ANALYSIS_PROMPT_TEMPLATE.format(query=input_query)
             result = sdf.chat(prompt)
 
             # Ensure proper output format
             if isinstance(result, dict) and "type" in result and "value" in result:
                 return df, result
-            else:
-                # Format the result if it's not already in the correct format
-                formatted_result = {
-                    "type": "string",
-                    "value": str(result)
-                }
-                return df, formatted_result
+            # Format the result if it's not already in the correct format
+            return df, {"type": "string", "value": str(result)}
 
         return df, {"type": "string", "value": "Model not supported."}
 
@@ -111,7 +110,7 @@ if __name__ == "__main__":
 
         while True:
             test_input = input("\nEnter your query (or 'q' to quit): ")
-            if test_input.lower() == 'q':
+            if test_input.lower() == "q":
                 break
             print("\nAnalyzing your query...")
             result = run(test_input, "openai", data=df)
