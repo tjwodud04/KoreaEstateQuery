@@ -11,19 +11,27 @@ def LIST_EXTENDS(v1: list, v2: list):
 
 
 class NLocation:
-    TO_INTEGER = 10 ** 8
+    """A geographic coordinate plus the map zoom level used to query Naver."""
 
-    def __init__(self, lat, lon, zoom=16):
-        self.lat = lat if type(lat) == 'float' else float(lat)
-        self.lon = lon if type(lon) == 'float' else float(lon)
+    TO_INTEGER = 10 ** 8
+    DEFAULT_ZOOM = 16
+    # Half-width / half-height of the map bounding box (in degrees) requested
+    # around a coordinate at the default zoom level.
+    BBOX_LON_OFFSET = 0.0137329
+    BBOX_LAT_OFFSET = 0.0069786
+
+    def __init__(self, lat, lon, zoom=DEFAULT_ZOOM):
+        self.lat = float(lat)
+        self.lon = float(lon)
         self.zoom = zoom
 
     def get_around_param(self):
+        """Return the lat/lon bounding box centred on this location."""
         return {
-            'leftLon': self.lon - 0.0137329,
-            'rightLon': self.lon + 0.0137329,
-            'topLat': self.lat + 0.0069786,
-            'bottomLat': self.lat - 0.0069786
+            'leftLon': self.lon - NLocation.BBOX_LON_OFFSET,
+            'rightLon': self.lon + NLocation.BBOX_LON_OFFSET,
+            'topLat': self.lat + NLocation.BBOX_LAT_OFFSET,
+            'bottomLat': self.lat - NLocation.BBOX_LAT_OFFSET
         }
 
     def get_tuple(self):

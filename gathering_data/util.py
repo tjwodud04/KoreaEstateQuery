@@ -1,22 +1,37 @@
 from time import sleep
+from typing import Optional
 from haversine import haversine
 from gathering_data.classes import *
 import requests
 from openai import OpenAI
 
-client = OpenAI()
+import config
 
-BASE_API_URL = "https://new.land.naver.com/api/"
-# Check Log
-# Time
-IS_LOGGING = True
+# Lazily-instantiated OpenAI client. Created on first use so that merely
+# importing this module does not require ``OPENAI_API_KEY`` to be set.
+_openai_client: Optional[OpenAI] = None
 
 
-def get(url="", params={}):
-    rep = requests.get(BASE_API_URL + url, params=params, headers={'User-Agent': '*'})
-    if IS_LOGGING is True: print('Get', rep.request.url)
-    if rep.status_code != 200: raise Exception('Response Error')
-    return rep.json()
+def _get_openai_client() -> OpenAI:
+    """Return a process-wide OpenAI client, creating it on first use."""
+    global _openai_client
+    if _openai_client is None:
+        _openai_client = OpenAI()
+    return _openai_client
+
+
+def get(url: str = "", params: Optional[dict] = None) -> dict:
+    """GET ``url`` on the Naver real-estate API and return the decoded JSON."""
+    response = requests.get(
+        config.NAVER_API_BASE_URL + url,
+        params=params or {},
+        headers={'User-Agent': '*'},
+    )
+    if config.NAVER_API_LOGGING:
+        print('Get', response.request.url)
+    if response.status_code != 200:
+        raise Exception('Response Error')
+    return response.json()
 
 
 def get_neighborhood(sector: NSector, nType=''):
@@ -41,12 +56,12 @@ def make_param_thing(sector: NSector, addon: NAddon = NAddon.get_default()):
         'selectedComplexBuildingNo': '',
         'fakeComplexMarker': '',
         'tag': '::::::::',
-        'rentPriceMin': 0,
-        'rentPriceMax': 900000000,
-        'priceMin': 0,
-        'priceMax': 900000000,
-        'areaMin': 0,
-        'areaMax': 900000000,
+        'rentPriceMin': config.SEARCH_FILTER_MIN,
+        'rentPriceMax': config.SEARCH_FILTER_MAX,
+        'priceMin': config.SEARCH_FILTER_MIN,
+        'priceMax': config.SEARCH_FILTER_MAX,
+        'areaMin': config.SEARCH_FILTER_MIN,
+        'areaMax': config.SEARCH_FILTER_MAX,
         'oldBuildYears': '',
         'recentlyBuildYears': '',
         'minHouseHoldCount': '',
@@ -121,7 +136,7 @@ def make_param_region(code):
     return {'cortarNo': code}
 
 
-def get_region_list(code="0000000000"):
+def get_region_list(code=config.DEFAULT_REGION_CODE):
     res = get(NRE_ROUTER.REGION_LIST, make_param_region(code))
     return parse_region(res)
 
@@ -201,24 +216,12 @@ def distance_between(l1: NLocation, l2: NLocation):
     return round(haversine(l1.get_tuple(), l2.get_tuple(), unit='m'))
 
 
-def get_distance_standard(standard={}):
-    default_standard = {
-        'BUS': 500,
-        'METRO': 500,
-        'INFANT': 750,
-        'PRESCHOOL': 750,
-        'PRI_SCHOOL': 1000,
-        'PUB_SCHOOL': 1000,
-        'HOSPITAL': 2000,
-        'PARKING': 500,
-        'MART': 500,
-        'CONVENIENCE': 300,
-        'WASHING': 500,
-        'BANK': 750,
-        'OFFICE': 1250
-    }
-    default_standard.update(standard)
-    return default_standard
+def get_distance_standard(standard: Optional[dict] = None) -> dict:
+    """Return amenity proximity thresholds (metres), overriding defaults with ``standard``."""
+    standards = dict(config.DEFAULT_DISTANCE_STANDARDS)
+    if standard:
+        standards.update(standard)
+    return standards
 
 
 def things_to_dusts(things: list[NThing], dimension: NDimension):
@@ -292,27 +295,22 @@ def get_all_on_sector(sector: NSector):
     neighbors = get_all_neighbors(sector)
     return (sector, things, neighbors)
 
-# streamlit에서 "Direct Input" 으로 검색 시 자연어 query에서 지역만 파싱하는 함수
+# Used by the Streamlit "Direct Input" flow to parse only the location out of
+# a free-text natural-language query.
 def extract_location_from_query(query: str) -> str:
-    """
-    Extract location information from the query using OpenAI API.
+    """Extract a single map-friendly location name from ``query`` via OpenAI.
+
+    Falls back to :data:`config.DEFAULT_LOCATION_FALLBACK` on any error.
     """
     try:
-        response = client.chat.completions.create(model="gpt-4o",  # 사용할 모델 지정
-        messages=[
-            {"role": "system", "content": (
-                "You are tasked with extracting the most specific location name mentioned in the user's query. "
-                "The location must be returned as a single neighborhood or district name in English, suitable for use with Google Maps. "
-                "Examples:\n"
-                "- Input: 'Find a house under 300 million won near Hongik University' -> Output: 'Seogyo-dong'\n"
-                "- Input: 'Recommend properties south-facing and large area near Hongik University' -> Output: 'Seogyo-dong'\n"
-                "- Input: 'Apartments in Gangnam station' -> Output: 'Gangnam station'\n"
-                "- Input: 'Properties near Itaewon' -> Output: 'Itaewon'\n"
-            )},
-            {"role": "user", "content": query}
-        ],
-        temperature=0)
-        location = response.choices[0].message.content.strip()
-        return location
-    except Exception as e:
-        return "Seoul"  # 에러 발생 시 기본값으로 서울 반환
+        response = _get_openai_client().chat.completions.create(
+            model=config.OPENAI_MODEL,
+            messages=[
+                {"role": "system", "content": config.LOCATION_EXTRACTION_SYSTEM_PROMPT},
+                {"role": "user", "content": query},
+            ],
+            temperature=config.LOCATION_EXTRACTION_TEMPERATURE,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception:
+        return config.DEFAULT_LOCATION_FALLBACK

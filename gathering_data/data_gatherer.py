@@ -2,28 +2,28 @@ from gathering_data.classes import *
 from gathering_data.util import *
 import requests
 import pandas as pd
-import urllib.parse
 from dotenv import load_dotenv
 import os
+
+import config
 
 load_dotenv()
 
 
 class NaverRECrawler:
-    def __init__(self):
-        self.default_coordinates = {
-            "강남역": (37.4979462, 127.0276206),
-            "역삼역": (37.5006, 127.0368),
-            "선릉역": (37.5044, 127.0505),
-        }
-        self.api_key = os.getenv("GOOGLE_API_KEY")
+    """Resolve a location to coordinates and collect nearby real-estate data."""
 
-    def get_coordinates(self, query):
-        encoded_query = urllib.parse.quote(query)
-        search_url = f"https://maps.googleapis.com/maps/api/geocode/json?address={encoded_query}&key={self.api_key}"
+    def __init__(self) -> None:
+        self.default_coordinates = config.DEFAULT_COORDINATES
+        self.api_key = os.getenv(config.ENV_GOOGLE_API_KEY)
 
+    def get_coordinates(self, query: str) -> NLocation:
+        """Geocode ``query`` via Google Maps, falling back to known coordinates."""
         try:
-            response = requests.get(search_url)
+            response = requests.get(
+                config.GOOGLE_GEOCODE_URL,
+                params={"address": query, "key": self.api_key},
+            )
             if response.status_code == 200:
                 data = response.json()
                 if data["status"] == "OK" and data["results"]:
@@ -37,31 +37,26 @@ class NaverRECrawler:
 
         raise Exception(f"Location not found for: {query}")
 
-    def search_location(self, query):
+    def search_location(self, query: str) -> pd.DataFrame:
+        """Return a dataframe of properties around the geocoded ``query``."""
         location = self.get_coordinates(query)
         print(f"Searching around coordinates: {location}")
         sector = get_sector(location)
         return self._get_real_estate_data(sector)
 
-    def _get_real_estate_data(self, sector):
+    def _get_real_estate_data(self, sector) -> pd.DataFrame:
+        """Build the property dataframe for ``sector`` with prices normalised."""
         things = get_things_each_direction(sector)
         neighbors = get_all_neighbors(sector)
         update_things_intersection(things, neighbors, get_distance_standard())
         df = pd.DataFrame([t.get_list() for t in things], columns=NThing.HEADER)
 
-        # 가격 단위 변환 (만원 -> 억원)
-        price_columns = [
-            "minDeal",
-            "maxDeal",
-            "medianDeal",
-            "minLease",
-            "maxLease",
-            "medianLease",
-        ]
-        for col in price_columns:
+        # Convert price units from 만원 (10k KRW) to 억원 (100M KRW).
+        for col in config.PRICE_COLUMNS:
             if col in df.columns:
                 df[col] = df[col].apply(
-                    lambda x: round(x / 10000, 2) if pd.notnull(x) else x
+                    lambda x: round(x / config.PRICE_UNIT_DIVISOR, config.PRICE_DECIMALS)
+                    if pd.notnull(x) else x
                 )
 
         return df
